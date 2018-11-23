@@ -1,13 +1,11 @@
-
 /**
  * Copyright (c) 2015-present, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the CC-by-NC license found in the
+ * This source code is licensed under the BSD+Patents license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
-// Copyright 2004-present Facebook. All Rights Reserved.
 // -*- c++ -*-
 
 #ifndef FAISS_AUTO_TUNE_H
@@ -16,6 +14,7 @@
 #include <vector>
 
 #include "Index.h"
+#include "IndexBinary.h"
 
 namespace faiss {
 
@@ -61,9 +60,9 @@ struct OneRecallAtRCriterion: AutoTuneCriterion {
 
     OneRecallAtRCriterion (idx_t nq, idx_t R);
 
-    virtual double evaluate (const float *D, const idx_t *I) const override;
+    double evaluate(const float* D, const idx_t* I) const override;
 
-    virtual ~OneRecallAtRCriterion () {}
+    ~OneRecallAtRCriterion() override {}
 };
 
 
@@ -73,9 +72,9 @@ struct IntersectionCriterion: AutoTuneCriterion {
 
     IntersectionCriterion (idx_t nq, idx_t R);
 
-    virtual double evaluate (const float *D, const idx_t *I) const override;
+    double evaluate(const float* D, const idx_t* I) const override;
 
-    virtual ~IntersectionCriterion () {}
+    ~IntersectionCriterion() override {}
 };
 
 /**
@@ -163,7 +162,7 @@ struct ParameterSpace {
     /// print a description on stdout
     void display () const;
 
-    /// add a new parameter
+    /// add a new parameter (or return it if it exists)
     ParameterRange &add_range(const char * name);
 
     /// initialize with reasonable parameters for the index
@@ -204,7 +203,7 @@ struct ParameterSpace {
 Index *index_factory (int d, const char *description,
                       MetricType metric = METRIC_L2);
 
-
+IndexBinary *index_binary_factory (int d, const char *description);
 
 } // namespace faiss
 

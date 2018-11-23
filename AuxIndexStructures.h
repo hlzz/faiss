@@ -1,27 +1,23 @@
-
 /**
  * Copyright (c) 2015-present, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the CC-by-NC license found in the
+ * This source code is licensed under the BSD+Patents license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
-// Copyright 2004-present Facebook. All Rights Reserved
 // -*- c++ -*-
+
 // Auxiliary index structures, that are used in indexes but that can
 // be forward-declared
 
 #ifndef FAISS_AUX_INDEX_STRUCTURES_H
 #define FAISS_AUX_INDEX_STRUCTURES_H
 
+#include <stdint.h>
+
 #include <vector>
-
-#if __cplusplus >= 201103L
 #include <unordered_set>
-#endif
-
-#include <set>
 
 
 #include "Index.h"
@@ -31,7 +27,7 @@ namespace faiss {
 /** The objective is to have a simple result structure while
  *  minimizing the number of mem copies in the result. The method
  *  do_allocation can be overloaded to allocate the result tables in
- *  the matrix type of a srcipting language like Lua or Python. */
+ *  the matrix type of a scripting language like Lua or Python. */
 struct RangeSearchResult {
     size_t nq;      ///< nb of queries
     size_t *lims;   ///< size (nq + 1)
@@ -44,7 +40,7 @@ struct RangeSearchResult {
     size_t buffer_size; ///< size of the result buffers used
 
     /// lims must be allocated on input to range_search.
-    explicit RangeSearchResult (size_t nq);
+    explicit RangeSearchResult (idx_t nq, bool alloc_lims=true);
 
     /// called when lims contains the nb of elements result entries
     /// for each query
@@ -68,9 +64,8 @@ struct IDSelectorRange: IDSelector {
     idx_t imin, imax;
 
     IDSelectorRange (idx_t imin, idx_t imax);
-    virtual bool is_member (idx_t id) const override;
-    virtual ~IDSelectorRange () {}
-
+    bool is_member(idx_t id) const override;
+    ~IDSelectorRange() override {}
 };
 
 
@@ -82,11 +77,7 @@ struct IDSelectorRange: IDSelector {
  * hash collisions if lsb's are always the same */
 struct IDSelectorBatch: IDSelector {
 
-#if __cplusplus >= 201103L
     std::unordered_set<idx_t> set;
-#else
-    std::set<idx_t> set;
-#endif
 
     typedef unsigned char uint8_t;
     std::vector<uint8_t> bloom; // assumes low bits of id are a good hash value
@@ -94,9 +85,8 @@ struct IDSelectorBatch: IDSelector {
     idx_t mask;
 
     IDSelectorBatch (long n, const idx_t *indices);
-    virtual bool is_member (idx_t id) const override;
-    virtual ~IDSelectorBatch() {}
-
+    bool is_member(idx_t id) const override;
+    ~IDSelectorBatch() override {}
 };
 
 
@@ -169,9 +159,7 @@ struct RangeSearchPartialResult: BufferList {
     /// begin a new result
     QueryResult & new_result (idx_t qno);
 
-
     void finalize ();
-
 
     /// called by range_search before do_allocation
     void set_lims ();
@@ -180,6 +168,46 @@ struct RangeSearchPartialResult: BufferList {
     void set_result (bool incremental = false);
 
 };
+
+/***********************************************************
+ * Abstract I/O objects
+ ***********************************************************/
+
+
+struct IOReader {
+    // fread
+    virtual size_t operator()(
+         void *ptr, size_t size, size_t nitems) = 0;
+
+    // return a file number that can be memory-mapped
+    virtual int fileno ();
+
+    virtual ~IOReader() {}
+};
+
+struct IOWriter {
+    // fwrite
+    virtual size_t operator()(
+         const void *ptr, size_t size, size_t nitems) = 0;
+
+    // return a file number that can be memory-mapped
+    virtual int fileno ();
+
+    virtual ~IOWriter() {}
+};
+
+
+struct VectorIOReader:IOReader {
+    std::vector<uint8_t> data;
+    size_t rp = 0;
+    size_t operator()(void *ptr, size_t size, size_t nitems) override;
+};
+
+struct VectorIOWriter:IOWriter {
+    std::vector<uint8_t> data;
+    size_t operator()(const void *ptr, size_t size, size_t nitems) override;
+};
+
 
 
 }; // namespace faiss

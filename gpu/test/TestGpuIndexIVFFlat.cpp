@@ -1,21 +1,21 @@
-
 /**
  * Copyright (c) 2015-present, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the CC-by-NC license found in the
+ * This source code is licensed under the BSD+Patents license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
-// Copyright 2004-present Facebook. All Rights Reserved.
 
 #include "../../IndexFlat.h"
-#include "../../IndexIVF.h"
+#include "../../IndexIVFFlat.h"
 #include "../GpuIndexIVFFlat.h"
 #include "../StandardGpuResources.h"
 #include "../utils/DeviceUtils.h"
 #include "../test/TestUtils.h"
+#include <cmath>
 #include <gtest/gtest.h>
+#include <glog/logging.h>
 #include <sstream>
 #include <vector>
 
@@ -72,8 +72,6 @@ void queryTest(faiss::MetricType metricType,
                bool useFloat16,
                int dimOverride = -1) {
   for (int tries = 0; tries < 3; ++tries) {
-    faiss::gpu::newTestSeed();
-
     Options opt;
     opt.dim = dimOverride != -1 ? dimOverride : opt.dim;
 
@@ -95,14 +93,17 @@ void queryTest(faiss::MetricType metricType,
     faiss::gpu::StandardGpuResources res;
     res.noTempMemory();
 
+    faiss::gpu::GpuIndexIVFFlatConfig config;
+    config.device = opt.device;
+    config.indicesOptions = opt.indicesOpt;
+    config.flatConfig.useFloat16 = useFloat16CoarseQuantizer;
+    config.useFloat16IVFStorage = useFloat16;
+
     faiss::gpu::GpuIndexIVFFlat gpuIndex(&res,
-                                         opt.device,
-                                         useFloat16CoarseQuantizer,
-                                         useFloat16,
                                          cpuIndex.d,
                                          cpuIndex.nlist,
-                                         opt.indicesOpt,
-                                         cpuIndex.metric_type);
+                                         cpuIndex.metric_type,
+                                         config);
     gpuIndex.copyFrom(&cpuIndex);
     gpuIndex.setNumProbes(opt.nprobe);
 
@@ -113,7 +114,7 @@ void queryTest(faiss::MetricType metricType,
                                // FIXME: the fp16 bounds are
                                // useless when math (the accumulator) is
                                // in fp16. Figure out another way to test
-                               compFloat16 ? 0.99f : 0.1f,
+                               compFloat16 ? 0.70f : 0.1f,
                                compFloat16 ? 0.65f : 0.015f);
   }
 }
@@ -122,8 +123,6 @@ void addTest(faiss::MetricType metricType,
              bool useFloat16CoarseQuantizer,
              bool useFloat16) {
   for (int tries = 0; tries < 5; ++tries) {
-    faiss::gpu::newTestSeed();
-
     Options opt;
 
     std::vector<float> trainVecs = faiss::gpu::randVecs(opt.numTrain, opt.dim);
@@ -145,14 +144,17 @@ void addTest(faiss::MetricType metricType,
     faiss::gpu::StandardGpuResources res;
     res.noTempMemory();
 
+    faiss::gpu::GpuIndexIVFFlatConfig config;
+    config.device = opt.device;
+    config.indicesOptions = opt.indicesOpt;
+    config.flatConfig.useFloat16 = useFloat16CoarseQuantizer;
+    config.useFloat16IVFStorage = useFloat16;
+
     faiss::gpu::GpuIndexIVFFlat gpuIndex(&res,
-                                         opt.device,
-                                         useFloat16CoarseQuantizer,
-                                         useFloat16,
                                          cpuIndex.d,
                                          cpuIndex.nlist,
-                                         opt.indicesOpt,
-                                         cpuIndex.metric_type);
+                                         cpuIndex.metric_type,
+                                         config);
     gpuIndex.copyFrom(&cpuIndex);
     gpuIndex.setNumProbes(opt.nprobe);
 
@@ -170,8 +172,6 @@ void addTest(faiss::MetricType metricType,
 
 void copyToTest(bool useFloat16CoarseQuantizer,
                 bool useFloat16) {
-  faiss::gpu::newTestSeed();
-
   Options opt;
   std::vector<float> trainVecs = faiss::gpu::randVecs(opt.numTrain, opt.dim);
   std::vector<float> addVecs = faiss::gpu::randVecs(opt.numAdd, opt.dim);
@@ -179,14 +179,17 @@ void copyToTest(bool useFloat16CoarseQuantizer,
   faiss::gpu::StandardGpuResources res;
   res.noTempMemory();
 
+  faiss::gpu::GpuIndexIVFFlatConfig config;
+  config.device = opt.device;
+  config.indicesOptions = opt.indicesOpt;
+  config.flatConfig.useFloat16 = useFloat16CoarseQuantizer;
+  config.useFloat16IVFStorage = useFloat16;
+
   faiss::gpu::GpuIndexIVFFlat gpuIndex(&res,
-                                       opt.device,
-                                       useFloat16CoarseQuantizer,
-                                       useFloat16,
                                        opt.dim,
                                        opt.numCentroids,
-                                       opt.indicesOpt,
-                                       faiss::METRIC_L2);
+                                       faiss::METRIC_L2,
+                                       config);
   gpuIndex.train(opt.numTrain, trainVecs.data());
   gpuIndex.add(opt.numAdd, addVecs.data());
   gpuIndex.setNumProbes(opt.nprobe);
@@ -217,8 +220,6 @@ void copyToTest(bool useFloat16CoarseQuantizer,
 
 void copyFromTest(bool useFloat16CoarseQuantizer,
                   bool useFloat16) {
-  faiss::gpu::newTestSeed();
-
   Options opt;
   std::vector<float> trainVecs = faiss::gpu::randVecs(opt.numTrain, opt.dim);
   std::vector<float> addVecs = faiss::gpu::randVecs(opt.numAdd, opt.dim);
@@ -236,14 +237,17 @@ void copyFromTest(bool useFloat16CoarseQuantizer,
   faiss::gpu::StandardGpuResources res;
   res.noTempMemory();
 
+  faiss::gpu::GpuIndexIVFFlatConfig config;
+  config.device = opt.device;
+  config.indicesOptions = opt.indicesOpt;
+  config.flatConfig.useFloat16 = useFloat16CoarseQuantizer;
+  config.useFloat16IVFStorage = useFloat16;
+
   faiss::gpu::GpuIndexIVFFlat gpuIndex(&res,
-                                       opt.device,
-                                       useFloat16CoarseQuantizer,
-                                       useFloat16,
                                        1,
                                        1,
-                                       opt.indicesOpt,
-                                       faiss::METRIC_L2);
+                                       faiss::METRIC_L2,
+                                       config);
   gpuIndex.setNumProbes(1);
 
   gpuIndex.copyFrom(&cpuIndex);
@@ -378,13 +382,71 @@ TEST(TestGpuIndexIVFFlat, Float32_32_CopyTo) {
   copyToTest(false, false);
 }
 
+TEST(TestGpuIndexIVFFlat, Float32_negative) {
+  Options opt;
+
+  auto trainVecs = faiss::gpu::randVecs(opt.numTrain, opt.dim);
+  auto addVecs = faiss::gpu::randVecs(opt.numAdd, opt.dim);
+
+  // Put all vecs on negative side
+  for (auto& f : trainVecs) {
+    f = std::abs(f) * -1.0f;
+  }
+
+  for (auto& f : addVecs) {
+    f *= std::abs(f) * -1.0f;
+  }
+
+  faiss::IndexFlatIP quantizerIP(opt.dim);
+  faiss::Index* quantizer = (faiss::Index*) &quantizerIP;
+
+  faiss::IndexIVFFlat cpuIndex(quantizer,
+                               opt.dim, opt.numCentroids,
+                               faiss::METRIC_INNER_PRODUCT);
+  cpuIndex.train(opt.numTrain, trainVecs.data());
+  cpuIndex.add(opt.numAdd, addVecs.data());
+  cpuIndex.nprobe = opt.nprobe;
+
+  faiss::gpu::StandardGpuResources res;
+  res.noTempMemory();
+
+  faiss::gpu::GpuIndexIVFFlatConfig config;
+  config.device = opt.device;
+  config.indicesOptions = opt.indicesOpt;
+
+  faiss::gpu::GpuIndexIVFFlat gpuIndex(&res,
+                                       cpuIndex.d,
+                                       cpuIndex.nlist,
+                                       cpuIndex.metric_type,
+                                       config);
+  gpuIndex.copyFrom(&cpuIndex);
+  gpuIndex.setNumProbes(opt.nprobe);
+
+  // Construct a positive test set
+  auto queryVecs = faiss::gpu::randVecs(opt.numQuery, opt.dim);
+
+  // Put all vecs on positive size
+  for (auto& f : queryVecs) {
+    f = std::abs(f);
+  }
+
+  bool compFloat16 = false;
+  faiss::gpu::compareIndices(queryVecs,
+                             cpuIndex, gpuIndex,
+                             opt.numQuery, opt.dim, opt.k, opt.toString(),
+                             compFloat16 ? kF16MaxRelErr : kF32MaxRelErr,
+                             // FIXME: the fp16 bounds are
+                             // useless when math (the accumulator) is
+                             // in fp16. Figure out another way to test
+                             compFloat16 ? 0.99f : 0.1f,
+                             compFloat16 ? 0.65f : 0.015f);
+}
+
 //
 // NaN tests
 //
 
 TEST(TestGpuIndexIVFFlat, QueryNaN) {
-  faiss::gpu::newTestSeed();
-
   Options opt;
 
   std::vector<float> trainVecs = faiss::gpu::randVecs(opt.numTrain, opt.dim);
@@ -393,14 +455,17 @@ TEST(TestGpuIndexIVFFlat, QueryNaN) {
   faiss::gpu::StandardGpuResources res;
   res.noTempMemory();
 
+  faiss::gpu::GpuIndexIVFFlatConfig config;
+  config.device = opt.device;
+  config.indicesOptions = opt.indicesOpt;
+  config.flatConfig.useFloat16 = faiss::gpu::randBool();
+  config.useFloat16IVFStorage = faiss::gpu::randBool();
+
   faiss::gpu::GpuIndexIVFFlat gpuIndex(&res,
-                                       opt.device,
-                                       faiss::gpu::randBool(),
-                                       faiss::gpu::randBool(),
                                        opt.dim,
                                        opt.numCentroids,
-                                       opt.indicesOpt,
-                                       faiss::METRIC_L2);
+                                       faiss::METRIC_L2,
+                                       config);
   gpuIndex.setNumProbes(opt.nprobe);
 
   gpuIndex.train(opt.numTrain, trainVecs.data());
@@ -428,21 +493,22 @@ TEST(TestGpuIndexIVFFlat, QueryNaN) {
 }
 
 TEST(TestGpuIndexIVFFlat, AddNaN) {
-  faiss::gpu::newTestSeed();
-
   Options opt;
 
   faiss::gpu::StandardGpuResources res;
   res.noTempMemory();
 
+  faiss::gpu::GpuIndexIVFFlatConfig config;
+  config.device = opt.device;
+  config.indicesOptions = opt.indicesOpt;
+  config.flatConfig.useFloat16 = faiss::gpu::randBool();
+  config.useFloat16IVFStorage = faiss::gpu::randBool();
+
   faiss::gpu::GpuIndexIVFFlat gpuIndex(&res,
-                                       opt.device,
-                                       faiss::gpu::randBool(),
-                                       faiss::gpu::randBool(),
                                        opt.dim,
                                        opt.numCentroids,
-                                       opt.indicesOpt,
-                                       faiss::METRIC_L2);
+                                       faiss::METRIC_L2,
+                                       config);
   gpuIndex.setNumProbes(opt.nprobe);
 
   int numNans = 10;
@@ -472,4 +538,72 @@ TEST(TestGpuIndexIVFFlat, AddNaN) {
   gpuIndex.search(opt.numQuery, queryVecs.data(), opt.k,
                   distance.data(), indices.data());
 
+}
+
+TEST(TestGpuIndexIVFFlat, UnifiedMemory) {
+  // Construct on a random device to test multi-device, if we have
+  // multiple devices
+  int device = faiss::gpu::randVal(0, faiss::gpu::getNumDevices() - 1);
+
+  if (!faiss::gpu::getFullUnifiedMemSupport(device)) {
+    return;
+  }
+
+  int dim = 256;
+
+  int numCentroids = 1024;
+  // 24 GB of vecs should be enough to test unified memory in
+  // oversubscription mode
+  size_t numAdd =
+    (size_t) 1024 * 1024 * 1024 * 24 / ((size_t) dim * sizeof(float));
+  size_t numTrain = numCentroids * 40;
+  int numQuery = 10;
+  int k = 10;
+  int nprobe = 8;
+
+  LOG(INFO) << "generating vecs";
+  std::vector<float> trainVecs = faiss::gpu::randVecs(numTrain, dim);
+  std::vector<float> addVecs = faiss::gpu::randVecs(numAdd, dim);
+
+  LOG(INFO) << "train CPU";
+  faiss::IndexFlatL2 quantizer(dim);
+  faiss::IndexIVFFlat cpuIndex(&quantizer, dim, numCentroids, faiss::METRIC_L2);
+  LOG(INFO) << "train CPU";
+  cpuIndex.train(numTrain, trainVecs.data());
+  LOG(INFO) << "add CPU";
+  cpuIndex.add(numAdd, addVecs.data());
+  cpuIndex.nprobe = nprobe;
+
+  faiss::gpu::StandardGpuResources res;
+  res.noTempMemory();
+
+  faiss::gpu::GpuIndexIVFFlatConfig config;
+  config.device = device;
+  config.memorySpace = faiss::gpu::MemorySpace::Unified;
+
+  faiss::gpu::GpuIndexIVFFlat gpuIndex(&res,
+                                       dim,
+                                       numCentroids,
+                                       faiss::METRIC_L2,
+                                       config);
+  LOG(INFO) << "copy from CPU";
+  gpuIndex.copyFrom(&cpuIndex);
+  gpuIndex.setNumProbes(nprobe);
+
+  LOG(INFO) << "compare";
+
+  faiss::gpu::compareIndices(cpuIndex, gpuIndex,
+                             numQuery, dim, k, "Unified Memory",
+                             kF32MaxRelErr,
+                             0.1f,
+                             0.015f);
+}
+
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+
+  // just run with a fixed test seed
+  faiss::gpu::setTestSeed(100);
+
+  return RUN_ALL_TESTS();
 }

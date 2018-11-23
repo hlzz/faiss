@@ -1,13 +1,11 @@
-
 /**
  * Copyright (c) 2015-present, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the CC-by-NC license found in the
+ * This source code is licensed under the BSD+Patents license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
-// Copyright 2004-present Facebook. All Rights Reserved.
 
 #include "IVFPQ.cuh"
 #include "../GpuResources.h"
@@ -39,11 +37,13 @@ IVFPQ::IVFPQ(GpuResources* resources,
              int bitsPerSubQuantizer,
              float* pqCentroidData,
              IndicesOptions indicesOptions,
-             bool useFloat16LookupTables) :
+             bool useFloat16LookupTables,
+             MemorySpace space) :
     IVFBase(resources,
             quantizer,
             numSubQuantizers,
-            indicesOptions),
+            indicesOptions,
+            space),
     numSubQuantizers_(numSubQuantizers),
     bitsPerSubQuantizer_(bitsPerSubQuantizer),
     numSubQuantizerCodes_(utils::pow2(bitsPerSubQuantizer_)),
@@ -194,10 +194,7 @@ IVFPQ::classifyAndAddVectors(Tensor<float, 2, true>& vecs,
                   closestSubQDistanceView,
                   closestSubQIndexView,
                   // We don't care about distances
-                  true,
-                  // Much larger tile size, since these vectors are a
-                  // lot smaller than query vectors
-                  1024);
+                  true);
   }
 
   // Now, we have the nearest sub-q centroid for each slice of the

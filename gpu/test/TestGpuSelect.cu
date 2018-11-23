@@ -1,13 +1,11 @@
-
 /**
  * Copyright (c) 2015-present, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the CC-by-NC license found in the
+ * This source code is licensed under the BSD+Patents license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
-// Copyright 2004-present Facebook. All Rights Reserved.
 
 #include "../utils/DeviceUtils.h"
 #include "../utils/BlockSelectKernel.cuh"
@@ -20,11 +18,6 @@
 #include <sstream>
 #include <unordered_map>
 #include <vector>
-
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
-}
 
 void testForSize(int rows, int cols, int k, bool dir, bool warp) {
   std::vector<float> v = faiss::gpu::randVecs(rows, cols);
@@ -185,4 +178,13 @@ TEST(TestGpuSelect, testExactWarp) {
 
     testForSize(rows, cols, cols, dir, true);
   }
+}
+
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+
+  // just run with a fixed test seed
+  faiss::gpu::setTestSeed(100);
+
+  return RUN_ALL_TESTS();
 }

@@ -1,13 +1,11 @@
-
 /**
  * Copyright (c) 2015-present, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the CC-by-NC license found in the
+ * This source code is licensed under the BSD+Patents license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
-// Copyright 2004-present Facebook. All Rights Reserved.
 
 #include "StandardGpuResources.h"
 #include "../FaissAssert.h"
@@ -32,14 +30,20 @@ StandardGpuResources::StandardGpuResources() :
     tempMemFraction_(kDefaultTempMemFraction),
     tempMemSize_(0),
     useFraction_(true),
-    pinnedMemSize_(kDefaultPinnedMemoryAllocation) {
+    pinnedMemSize_(kDefaultPinnedMemoryAllocation),
+    cudaMallocWarning_(true) {
 }
 
 StandardGpuResources::~StandardGpuResources() {
   for (auto& entry : defaultStreams_) {
     DeviceScope scope(entry.first);
 
-    CUDA_VERIFY(cudaStreamDestroy(entry.second));
+    auto it = userDefaultStreams_.find(entry.first);
+    if (it == userDefaultStreams_.end()) {
+      // The user did not specify this stream, thus we are the ones
+      // who have created it
+      CUDA_VERIFY(cudaStreamDestroy(entry.second));
+    }
   }
 
   for (auto& entry : alternateStreams_) {
@@ -71,6 +75,7 @@ StandardGpuResources::~StandardGpuResources() {
 void
 StandardGpuResources::noTempMemory() {
   setTempMemory(0);
+  setCudaMallocWarning(false);
 }
 
 void
@@ -96,6 +101,34 @@ StandardGpuResources::setPinnedMemory(size_t size) {
 }
 
 void
+StandardGpuResources::setDefaultStream(int device, cudaStream_t stream) {
+  auto it = defaultStreams_.find(device);
+  if (it != defaultStreams_.end()) {
+    // Replace this stream with the user stream
+    CUDA_VERIFY(cudaStreamDestroy(it->second));
+    it->second = stream;
+  }
+
+  userDefaultStreams_[device] = stream;
+}
+
+void
+StandardGpuResources::setDefaultNullStreamAllDevices() {
+  for (int dev = 0; dev < getNumDevices(); ++dev) {
+    setDefaultStream(dev, nullptr);
+  }
+}
+
+void
+StandardGpuResources::setCudaMallocWarning(bool b) {
+  cudaMallocWarning_ = b;
+
+  for (auto& v : memory_) {
+    v.second->setCudaMallocWarning(b);
+  }
+}
+
+void
 StandardGpuResources::initializeForDevice(int device) {
   // Use default streams as a marker for whether or not a certain
   // device has been initialized
@@ -118,14 +151,22 @@ StandardGpuResources::initializeForDevice(int device) {
   // Make sure that device properties for all devices are cached
   auto& prop = getDeviceProperties(device);
 
-  // Also check to make sure we meet our minimum compute capability (3.5)
-  FAISS_ASSERT(prop.major > 3 || (prop.major == 3 && prop.minor >= 5) ||
-               !"Device not supported, need 3.5+ compute capability");
+  // Also check to make sure we meet our minimum compute capability (3.0)
+  FAISS_ASSERT_FMT(prop.major >= 3,
+                   "Device id %d with CC %d.%d not supported, "
+                   "need 3.0+ compute capability",
+                   device, prop.major, prop.minor);
 
   // Create streams
   cudaStream_t defaultStream = 0;
-  CUDA_VERIFY(cudaStreamCreateWithFlags(&defaultStream,
-                                        cudaStreamNonBlocking));
+  auto it = userDefaultStreams_.find(device);
+  if (it != userDefaultStreams_.end()) {
+    // We already have a stream provided by the user
+    defaultStream = it->second;
+  } else {
+    CUDA_VERIFY(cudaStreamCreateWithFlags(&defaultStream,
+                                          cudaStreamNonBlocking));
+  }
 
   defaultStreams_[device] = defaultStream;
 
@@ -165,9 +206,12 @@ StandardGpuResources::initializeForDevice(int device) {
   }
 
   FAISS_ASSERT(memory_.count(device) == 0);
-  memory_.emplace(device,
-                  std::unique_ptr<StackDeviceMemory>(
-                    new StackDeviceMemory(device, toAlloc)));
+
+  auto mem = std::unique_ptr<StackDeviceMemory>(
+    new StackDeviceMemory(device, toAlloc));
+  mem->setCudaMallocWarning(cudaMallocWarning_);
+
+  memory_.emplace(device, std::move(mem));
 }
 
 cublasHandle_t

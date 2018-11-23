@@ -1,16 +1,16 @@
-
 /**
  * Copyright (c) 2015-present, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the CC-by-NC license found in the
+ * This source code is licensed under the BSD+Patents license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
-// Copyright 2004-present Facebook. All Rights Reserved
 // -*- c++ -*-
 
 #include "AuxIndexStructures.h"
+
+#include "FaissAssert.h"
 
 #include <cstring>
 
@@ -21,9 +21,13 @@ namespace faiss {
  * RangeSearchResult
  ***********************************************************************/
 
-RangeSearchResult::RangeSearchResult (size_t nq): nq (nq) {
-    lims = new size_t [nq + 1];
-    memset (lims, 0, sizeof(*lims) * (nq + 1));
+RangeSearchResult::RangeSearchResult (idx_t nq, bool alloc_lims): nq (nq) {
+    if (alloc_lims) {
+        lims = new size_t [nq + 1];
+        memset (lims, 0, sizeof(*lims) * (nq + 1));
+    } else {
+        lims = nullptr;
+    }
     labels = nullptr;
     distances = nullptr;
     buffer_size = 1024 * 256;
@@ -159,6 +163,10 @@ void RangeSearchPartialResult::set_result (bool incremental)
 }
 
 
+/***********************************************************************
+ * IDSelectorRange
+ ***********************************************************************/
+
 IDSelectorRange::IDSelectorRange (idx_t imin, idx_t imax):
     imin (imin), imax (imax)
 {
@@ -170,6 +178,9 @@ bool IDSelectorRange::is_member (idx_t id) const
 }
 
 
+/***********************************************************************
+ * IDSelectorBatch
+ ***********************************************************************/
 
 IDSelectorBatch::IDSelectorBatch (long n, const idx_t *indices)
 {
@@ -198,9 +209,44 @@ bool IDSelectorBatch::is_member (idx_t i) const
 }
 
 
+/***********************************************************************
+ * IO functions
+ ***********************************************************************/
 
 
-
-
-
+int IOReader::fileno ()
+{
+    FAISS_THROW_MSG ("IOReader does not support memory mapping");
 }
+
+int IOWriter::fileno ()
+{
+    FAISS_THROW_MSG ("IOWriter does not support memory mapping");
+}
+
+
+size_t VectorIOWriter::operator()(
+                const void *ptr, size_t size, size_t nitems)
+{
+    size_t o = data.size();
+    data.resize(o + size * nitems);
+    memcpy (&data[o], ptr, size * nitems);
+    return nitems;
+}
+
+size_t VectorIOReader::operator()(
+                  void *ptr, size_t size, size_t nitems)
+{
+    if (rp >= data.size()) return 0;
+    size_t nremain = (data.size() - rp) / size;
+    if (nremain < nitems) nitems = nremain;
+    memcpy (ptr, &data[rp], size * nitems);
+    rp += size * nitems;
+    return nitems;
+}
+
+
+
+
+
+} // namespace faiss

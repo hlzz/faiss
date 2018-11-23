@@ -1,13 +1,11 @@
-
 /**
  * Copyright (c) 2015-present, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the CC-by-NC license found in the
+ * This source code is licensed under the BSD+Patents license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
-// Copyright 2004-present Facebook. All Rights Reserved
 // -*- c++ -*-
 
 #include "utils.h"
@@ -16,9 +14,6 @@
 #include <cassert>
 #include <cstring>
 #include <cmath>
-
-#include <smmintrin.h>
-#include <mmintrin.h>
 
 #include <sys/time.h>
 #include <sys/types.h>
@@ -83,7 +78,7 @@ size_t get_mem_usage_kb ()
     char fname[256];
     snprintf (fname, 256, "/proc/%d/status", pid);
     FILE * f = fopen (fname, "r");
-    FAISS_ASSERT (f || !"cannot open proc status file") ;
+    FAISS_THROW_IF_NOT_MSG (f, "cannot open proc status file");
     size_t sz = 0;
     for (;;) {
         char buf [256];
@@ -110,109 +105,32 @@ size_t get_mem_usage_kb ()
  * Random data generation functions
  **************************************************/
 
-/**
- * The definition of random functions depends on the architecture:
- *
- * - for Linux, we rely on re-entrant functions (random_r). This
- *   provides good quality reproducible random sequences.
- *
- * - for Apple, we use rand_r. Apple is trying so hard to deprecate
- *   this function that it removed its definition form stdlib.h, so we
- *   re-declare it below. Fortunately, since it is deprecated, its
- *   prototype should not change much in the forerseeable future.
- *
- * Unfortunately, system designers are more concerned with making the
- * most unpredictable random sequences for cryptographic use, when in
- * scientific contexts what acutally matters is having reproducible
- * squences in multi-threaded contexts.
- */
-
-
-#ifdef __linux__
-
-
-
+RandomGenerator::RandomGenerator (long seed)
+    : mt((unsigned int)seed) {}
 
 int RandomGenerator::rand_int ()
 {
-    int32_t a;
-    random_r (&rand_data, &a);
-    return a;
+    return mt() & 0x7fffffff;
 }
 
 long RandomGenerator::rand_long ()
 {
-    int32_t a, b;
-    random_r (&rand_data, &a);
-    random_r (&rand_data, &b);
-    return long(a) | long(b) << 31;
+    return long(rand_int()) | long(rand_int()) << 31;
 }
-
-
-RandomGenerator::RandomGenerator (long seed)
-{
-    memset (&rand_data, 0, sizeof (rand_data));
-    initstate_r (seed, rand_state, sizeof (rand_state), &rand_data);
-}
-
-
-RandomGenerator::RandomGenerator (const RandomGenerator & other)
-{
-    memcpy (rand_state, other.rand_state, sizeof(rand_state));
-    rand_data = other.rand_data;
-    setstate_r (rand_state, &rand_data);
-}
-
-
-#elif __APPLE__
-
-extern "C" {
-int rand_r(unsigned *seed);
-}
-
-RandomGenerator::RandomGenerator (long seed)
-{
-    rand_state = seed;
-}
-
-
-RandomGenerator::RandomGenerator (const RandomGenerator & other)
-{
-    rand_state = other.rand_state;
-}
-
-
-int RandomGenerator::rand_int ()
-{
-    // RAND_MAX is 31 bits
-    // try to add more randomness in the lower bits
-    int lowbits = rand_r(&rand_state) >> 15;
-    return rand_r(&rand_state) ^ lowbits;
-}
-
-long RandomGenerator::rand_long ()
-{
-    return long(random()) | long(random()) << 31;
-}
-
-
-
-#endif
 
 int RandomGenerator::rand_int (int max)
-{   // this suffers form non-uniform probabilities when max is not a
-    // power of 2, but if RAND_MAX >> max the bias is limited.
-    return rand_int () % max;
+{
+    return mt() % max;
 }
 
 float RandomGenerator::rand_float ()
 {
-    return rand_int() / float(1L << 31);
+    return mt() / float(mt.max());
 }
 
 double RandomGenerator::rand_double ()
 {
-    return rand_long() / double(1L << 62);
+    return mt() / double(mt.max());
 }
 
 
@@ -391,156 +309,13 @@ void reflection_ref (const float * u, float * x, size_t n, size_t d, size_t nu)
     }
 }
 
-/*********************************************************
- * Optimized distance computations
- *********************************************************/
 
 
 
-/* Functions to compute:
-   - L2 distance between 2 vectors
-   - inner product between 2 vectors
-   - L2 norm of a vector
 
-   The functions should probably not be invoked when a large number of
-   vectors are be processed in batch (in which case Matrix multiply
-   is faster), but may be useful for comparing vectors isolated in
-   memory.
-
-   Works with any vectors of any dimension, even unaligned (in which
-   case they are slower).
-
-*/
-
-// reads 0 <= d < 4 floats as __m128
-static inline __m128 masked_read (int d, const float *x)
-{
-    assert (0 <= d && d < 4);
-    __attribute__((__aligned__(16))) float buf[4] = {0, 0, 0, 0};
-    switch (d) {
-      case 3:
-        buf[2] = x[2];
-      case 2:
-        buf[1] = x[1];
-      case 1:
-        buf[0] = x[0];
-    }
-    return _mm_load_ps (buf);
-}
-
-/* SSE-implementation of L2 distance */
-float fvec_L2sqr (const float * x,
-                 const float * y,
-                 size_t d)
-{
-    __m128 mx, my;
-    __m128 msum1 = _mm_setzero_ps();
-
-    while (d >= 4) {
-        mx = _mm_loadu_ps (x); x += 4;
-        my = _mm_loadu_ps (y); y += 4;
-        const __m128 a_m_b1 = _mm_sub_ps (mx, my);
-        msum1 = _mm_add_ps (msum1, _mm_mul_ps (a_m_b1, a_m_b1));
-        d -= 4;
-    }
-
-    // add the last 1, 2 or 3 values
-    mx = masked_read (d, x);
-    my = masked_read (d, y);
-    __m128 a_m_b1 = _mm_sub_ps (mx, my);
-
-    msum1 = _mm_add_ps (msum1, _mm_mul_ps (a_m_b1, a_m_b1));
-
-    msum1 = _mm_hadd_ps (msum1, msum1);
-    msum1 = _mm_hadd_ps (msum1, msum1);
-    return  _mm_cvtss_f32 (msum1);
-}
-
-
-/* same without SSE */
-float fvec_L2sqr_ref (const float * x,
-                     const float * y,
-                     size_t d)
-{
-    size_t i;
-    float res_ = 0;
-    for (i = 0; i < d; i++) {
-        const float tmp = x[i] - y[i];
-       res_ += tmp * tmp;
-    }
-    return res_;
-}
-
-float fvec_inner_product (const float * x,
-                         const float * y,
-                         size_t d)
-{
-    __m128 mx, my;
-    __m128 msum1 = _mm_setzero_ps();
-
-    while (d >= 4) {
-        mx = _mm_loadu_ps (x); x += 4;
-        my = _mm_loadu_ps (y); y += 4;
-        msum1 = _mm_add_ps (msum1, _mm_mul_ps (mx, my));
-        d -= 4;
-    }
-
-    // add the last 1, 2, or 3 values
-    mx = masked_read (d, x);
-    my = masked_read (d, y);
-    __m128 prod = _mm_mul_ps (mx, my);
-
-    msum1 = _mm_add_ps (msum1, prod);
-
-    msum1 = _mm_hadd_ps (msum1, msum1);
-    msum1 = _mm_hadd_ps (msum1, msum1);
-    return  _mm_cvtss_f32 (msum1);
-}
-
-
-float fvec_inner_product_ref (const float * x,
-                             const float * y,
-                             size_t d)
-{
-    size_t i;
-    float res_ = 0;
-    for (i = 0; i < d; i++)
-       res_ += x[i] * y[i];
-    return res_;
-}
-
-
-float fvec_norm_L2sqr (const float *  x,
-                      size_t d)
-{
-    __m128 mx;
-    __m128 msum1 = _mm_setzero_ps();
-
-    while (d >= 4) {
-        mx = _mm_loadu_ps (x); x += 4;
-        msum1 = _mm_add_ps (msum1, _mm_mul_ps (mx, mx));
-        d -= 4;
-    }
-
-    mx = masked_read (d, x);
-    msum1 = _mm_add_ps (msum1, _mm_mul_ps (mx, mx));
-
-    msum1 = _mm_hadd_ps (msum1, msum1);
-    msum1 = _mm_hadd_ps (msum1, msum1);
-    return  _mm_cvtss_f32 (msum1);
-}
-
-
-float fvec_norm_L2sqr_ref (const float * __restrict x,
-                          size_t d)
-{
-    size_t i;
-    double res_ = 0;
-    for (i = 0; i < d; i++)
-       res_ += x[i] * x[i];
-    return res_;
-}
-
+/***************************************************************************
+ * Matrix/vector ops
+ ***************************************************************************/
 
 
 
@@ -649,8 +424,8 @@ static void knn_inner_product_sse (const float * x,
 
 #pragma omp parallel for
     for (size_t i = 0; i < nx; i++) {
-        const float * x_ = x + i * d;
-        const float * y_ = y;
+        const float * x_i = x + i * d;
+        const float * y_j = y;
 
         float * __restrict simi = res->get_val(i);
         long * __restrict idxi = res->get_ids (i);
@@ -658,13 +433,13 @@ static void knn_inner_product_sse (const float * x,
         minheap_heapify (k, simi, idxi);
 
         for (size_t j = 0; j < ny; j++) {
-            float ip = fvec_inner_product (x_, y_, d);
+            float ip = fvec_inner_product (x_i, y_j, d);
 
             if (ip > simi[0]) {
                 minheap_pop (k, simi, idxi);
                 minheap_push (k, simi, idxi, ip, j);
             }
-            y_ += d;
+            y_j += d;
         }
         minheap_reorder (k, simi, idxi);
     }
@@ -681,21 +456,21 @@ static void knn_L2sqr_sse (
 
 #pragma omp parallel for
     for (size_t i = 0; i < nx; i++) {
-        const float * x_ = x + i * d;
-        const float * y_ = y;
+        const float * x_i = x + i * d;
+        const float * y_j = y;
         size_t j;
         float * __restrict simi = res->get_val(i);
         long * __restrict idxi = res->get_ids (i);
 
         maxheap_heapify (k, simi, idxi);
         for (j = 0; j < ny; j++) {
-            float disij = fvec_L2sqr (x_, y_, d);
+            float disij = fvec_L2sqr (x_i, y_j, d);
 
             if (disij < simi[0]) {
                 maxheap_pop (k, simi, idxi);
                 maxheap_push (k, simi, idxi, disij, j);
             }
-            y_ += d;
+            y_j += d;
         }
         maxheap_reorder (k, simi, idxi);
     }
@@ -829,12 +604,14 @@ static void knn_L2sqr_blas (const float * x,
  * KNN driver functions
  *******************************************************/
 
+int distance_compute_blas_threshold = 20;
+
 void knn_inner_product (const float * x,
         const float * y,
         size_t d, size_t nx, size_t ny,
         float_minheap_array_t * res)
 {
-    if (d % 4 == 0 && nx < 20) {
+    if (d % 4 == 0 && nx < distance_compute_blas_threshold) {
         knn_inner_product_sse (x, y, d, nx, ny, res);
     } else {
         knn_inner_product_blas (x, y, d, nx, ny, res);
@@ -844,8 +621,8 @@ void knn_inner_product (const float * x,
 
 
 struct NopDistanceCorrection {
-    float operator()(float dis, size_t qno, size_t bno) const {
-        return dis;
+  float operator()(float dis, size_t /*qno*/, size_t /*bno*/) const {
+    return dis;
     }
 };
 
@@ -854,7 +631,7 @@ void knn_L2sqr (const float * x,
                 size_t d, size_t nx, size_t ny,
                 float_maxheap_array_t * res)
 {
-    if (d % 4 == 0 && nx < 20) {
+    if (d % 4 == 0 && nx < distance_compute_blas_threshold) {
         knn_L2sqr_sse (x, y, d, nx, ny, res);
     } else {
         NopDistanceCorrection nop;
@@ -864,8 +641,8 @@ void knn_L2sqr (const float * x,
 
 struct BaseShiftDistanceCorrection {
     const float *base_shift;
-    float operator()(float dis, size_t qno, size_t bno) const {
-        return dis - base_shift[bno];
+    float operator()(float dis, size_t /*qno*/, size_t bno) const {
+      return dis - base_shift[bno];
     }
 };
 
@@ -1109,7 +886,7 @@ static void range_search_sse (const float * x,
                 float radius,
                 RangeSearchResult *res)
 {
-    FAISS_ASSERT (d % 4 == 0);
+    FAISS_THROW_IF_NOT (d % 4 == 0);
 
 #pragma omp parallel
     {
@@ -1156,7 +933,7 @@ void range_search_L2sqr (
         RangeSearchResult *res)
 {
 
-    if (d % 4 == 0 && nx < 20) {
+    if (d % 4 == 0 && nx < distance_compute_blas_threshold) {
         range_search_sse<true> (x, y, d, nx, ny, radius, res);
     } else {
         range_search_blas<true> (x, y, d, nx, ny, radius, res);
@@ -1171,7 +948,7 @@ void range_search_inner_product (
         RangeSearchResult *res)
 {
 
-    if (d % 4 == 0 && nx < 20) {
+    if (d % 4 == 0 && nx < distance_compute_blas_threshold) {
         range_search_sse<false> (x, y, d, nx, ny, radius, res);
     } else {
         range_search_blas<false> (x, y, d, nx, ny, radius, res);
@@ -1205,7 +982,7 @@ void inner_product_to_L2sqr (float * __restrict dis,
 
 void matrix_qr (int m, int n, float *a)
 {
-    FAISS_ASSERT(m >= n);
+    FAISS_THROW_IF_NOT (m >= n);
     FINTEGER mi = m, ni = n, ki = mi < ni ? mi : ni;
     std::vector<float> tau (ki);
     FINTEGER lwork = -1, info;
@@ -1282,15 +1059,17 @@ void pairwise_L2sqr (long d,
 #define EPS (1 / 1024.)
 
 /* For k-means, compute centroids given assignment of vectors to centroids */
-/* NOTE: This could be multi-threaded (use histogram of indexes) */
 int km_update_centroids (const float * x,
-                          float * centroids,
-                          long * assign,
-                          size_t d, size_t k, size_t n)
+                         float * centroids,
+                         long * assign,
+                         size_t d, size_t k, size_t n,
+                         size_t k_frozen)
 {
+    k -= k_frozen;
+    centroids += k_frozen * d;
+
     std::vector<size_t> hassign(k);
     memset (centroids, 0, sizeof(*centroids) * d * k);
-
 
 #pragma omp parallel
     {
@@ -1300,12 +1079,12 @@ int km_update_centroids (const float * x,
         size_t c0 = (k * rank) / nt;
         size_t c1 = (k * (rank + 1)) / nt;
         const float *xi = x;
-        // printf("thread %d/%d: centroids %ld:%ld\n", rank, nt, c0, c1);
         size_t nacc = 0;
 
         for (size_t i = 0; i < n; i++) {
             long ci = assign[i];
-            assert (ci >= 0 && ci < k);
+            assert (ci >= 0 && ci < k + k_frozen);
+            ci -= k_frozen;
             if (ci >= c0 && ci < c1)  {
                 float * c = centroids + ci * d;
                 hassign[ci]++;
@@ -1315,7 +1094,6 @@ int km_update_centroids (const float * x,
             }
             xi += d;
         }
-        // printf("thread %d/%d: nacc = %ld/%ld\n", rank, nt, nacc, n);
 
     }
 
@@ -1335,7 +1113,7 @@ int km_update_centroids (const float * x,
     for (size_t ci = 0; ci < k; ci++) {
         if (hassign[ci] == 0) { /* need to redefine a centroid */
             size_t cj;
-            for (cj = 0; 1; cj = (cj+1) % k) {
+            for (cj = 0; 1; cj = (cj + 1) % k) {
                 /* probability to pick this cluster for split */
                 float p = (hassign[cj] - 1.0) / (float) (n - k);
                 float r = rng.rand_float ();
@@ -1346,15 +1124,15 @@ int km_update_centroids (const float * x,
             memcpy (centroids+ci*d, centroids+cj*d, sizeof(*centroids) * d);
 
             /* small symmetric pertubation. Much better than  */
-            for (size_t j = 0; j < d; j++)
+            for (size_t j = 0; j < d; j++) {
                 if (j % 2 == 0) {
                     centroids[ci * d + j] *= 1 + EPS;
                     centroids[cj * d + j] *= 1 - EPS;
+                } else {
+                    centroids[ci * d + j] *= 1 - EPS;
+                    centroids[cj * d + j] *= 1 + EPS;
                 }
-                else {
-                    centroids[ci * d + j] *= 1 + EPS;
-                    centroids[cj * d + j] *= 1 - EPS;
-                }
+            }
 
             /* assume even split of the cluster */
             hassign[ci] = hassign[cj] / 2;
@@ -1390,6 +1168,71 @@ void ranklist_handle_ties (int k, long *idx, const float *dis)
         }
     }
 }
+
+size_t merge_result_table_with (size_t n, size_t k,
+                                long *I0, float *D0,
+                                const long *I1, const float *D1,
+                                bool keep_min,
+                                long translation)
+{
+    size_t n1 = 0;
+
+#pragma omp parallel reduction(+:n1)
+    {
+        std::vector<long> tmpI (k);
+        std::vector<float> tmpD (k);
+
+#pragma omp for
+        for (size_t i = 0; i < n; i++) {
+            long *lI0 = I0 + i * k;
+            float *lD0 = D0 + i * k;
+            const long *lI1 = I1 + i * k;
+            const float *lD1 = D1 + i * k;
+            size_t r0 = 0;
+            size_t r1 = 0;
+
+            if (keep_min) {
+                for (size_t j = 0; j < k; j++) {
+
+                    if (lI0[r0] >= 0 && lD0[r0] < lD1[r1]) {
+                        tmpD[j] = lD0[r0];
+                        tmpI[j] = lI0[r0];
+                        r0++;
+                    } else if (lD1[r1] >= 0) {
+                        tmpD[j] = lD1[r1];
+                        tmpI[j] = lI1[r1] + translation;
+                        r1++;
+                    } else { // both are NaNs
+                        tmpD[j] = NAN;
+                        tmpI[j] = -1;
+                    }
+                }
+            } else {
+                for (size_t j = 0; j < k; j++) {
+                    if (lI0[r0] >= 0 && lD0[r0] > lD1[r1]) {
+                        tmpD[j] = lD0[r0];
+                        tmpI[j] = lI0[r0];
+                        r0++;
+                    } else if (lD1[r1] >= 0) {
+                        tmpD[j] = lD1[r1];
+                        tmpI[j] = lI1[r1] + translation;
+                        r1++;
+                    } else { // both are NaNs
+                        tmpD[j] = NAN;
+                        tmpI[j] = -1;
+                    }
+                }
+            }
+            n1 += r1;
+            memcpy (lD0, tmpD.data(), sizeof (lD0[0]) * k);
+            memcpy (lI0, tmpI.data(), sizeof (lI0[0]) * k);
+        }
+    }
+
+    return n1;
+}
+
+
 
 size_t ranklist_intersection_size (size_t k1, const long *v1,
                                    size_t k2, const long *v2_in)
@@ -1466,7 +1309,7 @@ int ivec_hist (size_t n, const int * v, int vmax, int *hist) {
 
 void bincode_hist(size_t n, size_t nbits, const uint8_t *codes, int *hist)
 {
-    FAISS_ASSERT (nbits % 8 == 0);
+    FAISS_THROW_IF_NOT (nbits % 8 == 0);
     size_t d = nbits / 8;
     std::vector<int> accu(d * 256);
     const uint8_t *c = codes;
@@ -1676,118 +1519,6 @@ void fvec_argsort_parallel (size_t n, const float *vals,
 
 
 
-/***************************************************************************
- * heavily optimized table computations
- ***************************************************************************/
-
-
-static inline void fvec_madd_ref (size_t n, const float *a,
-                           float bf, const float *b, float *c) {
-    for (size_t i = 0; i < n; i++)
-        c[i] = a[i] + bf * b[i];
-}
-
-
-static inline void fvec_madd_sse (size_t n, const float *a,
-                                  float bf, const float *b, float *c) {
-    n >>= 2;
-    __m128 bf4 = _mm_set_ps1 (bf);
-    __m128 * a4 = (__m128*)a;
-    __m128 * b4 = (__m128*)b;
-    __m128 * c4 = (__m128*)c;
-
-    while (n--) {
-        *c4 = _mm_add_ps (*a4, _mm_mul_ps (bf4, *b4));
-        b4++;
-        a4++;
-        c4++;
-    }
-}
-
-void fvec_madd (size_t n, const float *a,
-                       float bf, const float *b, float *c)
-{
-    if ((n & 3) == 0 &&
-        ((((long)a) | ((long)b) | ((long)c)) & 15) == 0)
-        fvec_madd_sse (n, a, bf, b, c);
-    else
-        fvec_madd_ref (n, a, bf, b, c);
-}
-
-static inline int fvec_madd_and_argmin_ref (size_t n, const float *a,
-                                         float bf, const float *b, float *c) {
-    float vmin = 1e20;
-    int imin = -1;
-
-    for (size_t i = 0; i < n; i++) {
-        c[i] = a[i] + bf * b[i];
-        if (c[i] < vmin) {
-            vmin = c[i];
-            imin = i;
-        }
-    }
-    return imin;
-}
-
-static inline int fvec_madd_and_argmin_sse (size_t n, const float *a,
-                                         float bf, const float *b, float *c) {
-    n >>= 2;
-    __m128 bf4 = _mm_set_ps1 (bf);
-    __m128 vmin4 = _mm_set_ps1 (1e20);
-    __m128i imin4 = _mm_set1_epi32 (-1);
-    __m128i idx4 = _mm_set_epi32 (3, 2, 1, 0);
-    __m128i inc4 = _mm_set1_epi32 (4);
-    __m128 * a4 = (__m128*)a;
-    __m128 * b4 = (__m128*)b;
-    __m128 * c4 = (__m128*)c;
-
-    while (n--) {
-        __m128 vc4 = _mm_add_ps (*a4, _mm_mul_ps (bf4, *b4));
-        *c4 = vc4;
-        __m128i mask = (__m128i)_mm_cmpgt_ps (vmin4, vc4);
-        // imin4 = _mm_blendv_epi8 (imin4, idx4, mask); // slower!
-
-        imin4 = _mm_or_si128 (_mm_and_si128 (mask, idx4),
-                              _mm_andnot_si128 (mask, imin4));
-        vmin4 = _mm_min_ps (vmin4, vc4);
-        b4++;
-        a4++;
-        c4++;
-        idx4 = _mm_add_epi32 (idx4, inc4);
-    }
-
-    // 4 values -> 2
-    {
-        idx4 = _mm_shuffle_epi32 (imin4, 3 << 2 | 2);
-        __m128 vc4 = _mm_shuffle_ps (vmin4, vmin4, 3 << 2 | 2);
-        __m128i mask = (__m128i)_mm_cmpgt_ps (vmin4, vc4);
-        imin4 = _mm_or_si128 (_mm_and_si128 (mask, idx4),
-                              _mm_andnot_si128 (mask, imin4));
-        vmin4 = _mm_min_ps (vmin4, vc4);
-    }
-    // 2 values -> 1
-    {
-        idx4 = _mm_shuffle_epi32 (imin4, 1);
-        __m128 vc4 = _mm_shuffle_ps (vmin4, vmin4, 1);
-        __m128i mask = (__m128i)_mm_cmpgt_ps (vmin4, vc4);
-        imin4 = _mm_or_si128 (_mm_and_si128 (mask, idx4),
-                              _mm_andnot_si128 (mask, imin4));
-        // vmin4 = _mm_min_ps (vmin4, vc4);
-    }
-    return  _mm_extract_epi32 (imin4, 0);
-}
-
-
-int fvec_madd_and_argmin (size_t n, const float *a,
-                                 float bf, const float *b, float *c)
-{
-    if ((n & 3) == 0 &&
-        ((((long)a) | ((long)b) | ((long)c)) & 15) == 0)
-        return fvec_madd_and_argmin_sse (n, a, bf, b, c);
-    else
-        return fvec_madd_and_argmin_ref (n, a, bf, b, c);
-}
-
 
 
 const float *fvecs_maybe_subsample (
@@ -1811,6 +1542,25 @@ const float *fvecs_maybe_subsample (
                 sizeof (x[0]) * d);
     *n = n2;
     return x_subset;
+}
+
+
+void binary_to_real(int d, const uint8_t *x_in, float *x_out) {
+  for (int i = 0; i < d; ++i) {
+    x_out[i] = 2 * ((x_in[i / 8] & (1 << (i % 8))) != 0) - 1;
+  }
+}
+
+void real_to_binary(int d, const float *x_in, uint8_t *x_out) {
+  for (int i = 0; i < d / 8; ++i) {
+    uint8_t b = 0;
+    for (int j = 0; j < 8; ++j) {
+      if (x_in[8 * i + j] > 0) {
+        b |= (1 << j);
+      }
+    }
+    x_out[i] = b;
+  }
 }
 
 

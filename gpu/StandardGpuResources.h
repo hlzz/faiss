@@ -1,13 +1,11 @@
-
 /**
  * Copyright (c) 2015-present, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the CC-by-NC license found in the
+ * This source code is licensed under the BSD+Patents license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
-// Copyright 2004-present Facebook. All Rights Reserved.
 
 #pragma once
 
@@ -43,6 +41,17 @@ class StandardGpuResources : public GpuResources {
   /// transfers
   void setPinnedMemory(size_t size);
 
+  /// Called to change the stream for work ordering
+  void setDefaultStream(int device, cudaStream_t stream);
+
+  /// Called to change the work ordering streams to the null stream
+  /// for all devices
+  void setDefaultNullStreamAllDevices();
+
+  /// Enable or disable the warning about not having enough temporary memory
+  /// when cudaMalloc gets called
+  void setCudaMallocWarning(bool b);
+
  public:
   /// Internal system calls
   void initializeForDevice(int device) override;
@@ -62,6 +71,10 @@ class StandardGpuResources : public GpuResources {
  private:
   /// Our default stream that work is ordered on, one per each device
   std::unordered_map<int, cudaStream_t> defaultStreams_;
+
+  /// This contains particular streams as set by the user for
+  /// ordering, if any
+  std::unordered_map<int, cudaStream_t> userDefaultStreams_;
 
   /// Other streams we can use, per each device
   std::unordered_map<int, std::vector<cudaStream_t> > alternateStreams_;
@@ -91,6 +104,9 @@ class StandardGpuResources : public GpuResources {
 
   /// Amount of pinned memory we should allocate
   size_t pinnedMemSize_;
+
+  /// Whether or not a warning upon cudaMalloc is generated
+  bool cudaMallocWarning_;
 };
 
 } } // namespace

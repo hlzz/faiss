@@ -1,26 +1,19 @@
-
 /**
  * Copyright (c) 2015-present, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the CC-by-NC license found in the
+ * This source code is licensed under the BSD+Patents license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
-/* Copyright 2004-present Facebook. All Rights Reserved. */
+// -*- c++ -*-
+
 /* Function for soft heap */
 
 #include "Heap.h"
 
 
 namespace faiss {
-
-
-
-
-
-
-
 
 
 template <typename C>
@@ -125,9 +118,6 @@ template class HeapArray<CMin <float, long> >;
 template class HeapArray<CMax <float, long> >;
 template class HeapArray<CMin <int, long> >;
 template class HeapArray<CMax <int, long> >;
-
-
-
 
 
 }  // END namespace fasis
